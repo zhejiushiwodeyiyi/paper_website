@@ -1,1181 +1,204 @@
 ---
-import fs from 'node:fs';
-import path from 'node:path';
+import { siteContent } from '../data/site';
 
-type ModuleEntry = {
-  id: string;
-  label: string;
-  nodeCount: number;
-  nodes: string[];
+const normalizedBaseUrl = import.meta.env.BASE_URL.endsWith('/')
+  ? import.meta.env.BASE_URL
+  : `${import.meta.env.BASE_URL}/`;
+const assetUrl = (relativePath: string) =>
+  normalizedBaseUrl === '/' ? `./${relativePath}` : `${normalizedBaseUrl}${relativePath}`;
+
+const resourceHrefByKind: Record<string, string> = {
+  manuscript: assetUrl(siteContent.assetPaths.manuscriptPdf),
+  site: siteContent.links.siteRepoUrl,
 };
-
-type PhaseGraph = {
-  phaseId: string;
-  moduleCount: number;
-  modules: ModuleEntry[];
-  edges: { source: string; target: string; weight: number }[];
-};
-
-const phaseOrder = ['early', 'first', 'second', 'omicron', 'post'] as const;
-const normalizedBaseUrl = import.meta.env.BASE_URL.endsWith('/') ? import.meta.env.BASE_URL : `${import.meta.env.BASE_URL}/`;
-const phaseMeta: Record<string, { key: string; label: string; date: string; sample: number; regime: string; context: string; summary: string; stable: string; change: string; networkFigure: string; chordFigure: string; networkCaption: string; chordCaption: string }> = {
-  early: { key: 'early', label: 'Early', date: '2020.04–07', sample: 518, regime: 'Stress-centered', context: 'Abrupt restriction, uncertainty, school disruption, and acute threat appraisal.', summary: 'Stress-related circuitry dominates outgoing control, shaping downstream emotional and cognitive-social modules.', stable: 'The broad modular scaffold remains recognizable, organized into coherent symptom communities.', change: 'Stress has the clearest control advantage — the cleanest "acute-response regime" phase.', networkFigure: `${normalizedBaseUrl}figs/earlyphase_network.svg`, chordFigure: `${normalizedBaseUrl}figs/earlyphase_chord.svg`, networkCaption: 'Early phase network figure', chordCaption: 'Early phase module chord diagram' },
-  first: { key: 'first', label: 'First Wave', date: '2020.07–2021.01', sample: 2321, regime: 'Stress + physiological', context: 'Sustained disruption with stress still the main organizing force.', summary: 'Stress remains the leading controller. A physiological subcluster becomes visible without changing four-domain interpretation.', stable: 'Core architecture persists, reinforcing that phase-wise comparison is meaningful on a conserved scaffold.', change: 'Even when communities split visually, the higher-order interpretation remains stable.', networkFigure: `${normalizedBaseUrl}figs/firstwave_network.svg`, chordFigure: `${normalizedBaseUrl}figs/firstwave_chord.svg`, networkCaption: 'First Wave network figure', chordCaption: 'First Wave module chord diagram' },
-  second: { key: 'second', label: 'Second Wave', date: '2021.01–2022.01', sample: 4721, regime: 'Beginning redistribution', context: 'The crisis is no longer only acute; control becomes less monopolized by stress.', summary: 'Network scaffold intact, but the control map begins to distribute more visibly across multiple domains.', stable: 'Community organization broadly similar, preserving the central scaffold claim.', change: 'The transition phase — shift from dominance to broader governance begins to emerge.', networkFigure: `${normalizedBaseUrl}figs/secondwave_network.svg`, chordFigure: `${normalizedBaseUrl}figs/secondwave_chord.svg`, networkCaption: 'Second Wave network figure', chordCaption: 'Second Wave module chord diagram' },
-  omicron: { key: 'omicron', label: 'Omicron', date: '2022.01–2023.01', sample: 4023, regime: 'Distributed cross-domain', context: 'System reflects chronic adaptation rather than only acute stress response.', summary: 'Control more evenly shared across stress, cognitive-social, and self-perception/physiological domains.', stable: 'Architecture does not collapse or fragment into a qualitatively different system.', change: 'Supports the move toward multi-module governance under prolonged crisis.', networkFigure: `${normalizedBaseUrl}figs/omicron_network.svg`, chordFigure: `${normalizedBaseUrl}figs/omicron_chord.svg`, networkCaption: 'Omicron phase network figure', chordCaption: 'Omicron phase module chord diagram' },
-  post: { key: 'post', label: 'Post-Omicron', date: '2023.01–2024.01', sample: 2598, regime: 'Broad multi-module', context: 'Restrictions ease, but accumulated burden and adaptation continue to shape interaction.', summary: 'Greater boundary mixing with broader, more distributed control beyond early stress dominance.', stable: 'Persistent backbone of influential symptoms supports continuity across the full window.', change: 'Clearest phase for chronic adaptation, boundary mixing, and integrative leverage.', networkFigure: `${normalizedBaseUrl}figs/postomicron_network.svg`, chordFigure: `${normalizedBaseUrl}figs/postomicron_chord.svg`, networkCaption: 'Post-Omicron network figure', chordCaption: 'Post-Omicron module chord diagram' }
-};
-
-function phaseIdFromText(input: string): string | null {
-  const t = input.trim();
-  const low = t.toLowerCase();
-  if (low.includes('post omicron') || t.includes('Omicron后') || t.includes('后阶段')) return 'post';
-  if (low.includes('early phase') || t.includes('早期')) return 'early';
-  if (low.includes('first wave') || t.includes('第一波')) return 'first';
-  if (low.includes('second wave') || t.includes('第二波')) return 'second';
-  if (low.includes('omicron')) return 'omicron';
-  return null;
-}
-
-function parseModuleReport(reportText: string): Record<string, ModuleEntry[]> {
-  const lines = reportText.split(/\r?\n/);
-  const parsed: Record<string, ModuleEntry[]> = {};
-  let currentPhase: string | null = null;
-  let currentModule: ModuleEntry | null = null;
-
-  for (const line of lines) {
-    const sectionMatch = line.match(/^##\s+(.+)$/);
-    if (sectionMatch) {
-      currentPhase = phaseIdFromText(sectionMatch[1]);
-      currentModule = null;
-      if (currentPhase && !parsed[currentPhase]) parsed[currentPhase] = [];
-      continue;
-    }
-
-    if (!currentPhase) continue;
-
-    const moduleMatch = line.match(/^###\s*模块\d+\s*-\s*(.+?)\s*-\s*([A-Z]{3})\s*$/);
-    if (moduleMatch) {
-      currentModule = { id: moduleMatch[2], label: moduleMatch[2], nodeCount: 0, nodes: [] };
-      parsed[currentPhase].push(currentModule);
-      continue;
-    }
-
-    if (!currentModule) continue;
-
-    const countMatch = line.match(/节点数量:\s*(\d+)/);
-    if (countMatch) {
-      currentModule.nodeCount = Number(countMatch[1]);
-      continue;
-    }
-
-    const nodeMatch = line.match(/^\s*-\s+(.+)$/);
-    if (nodeMatch) currentModule.nodes.push(nodeMatch[1].trim());
-  }
-
-  return parsed;
-}
-
-function parsePhaseCsv(csvText: string) {
-  const rows = csvText.split(/\r?\n/).filter(Boolean);
-  return rows.slice(1).map((line) => {
-    const [source, target, weightRaw] = line.split(',');
-    return { source: source.trim(), target: target.trim(), weight: Number(weightRaw) };
-  }).filter((r) => r.source && r.target && Number.isFinite(r.weight));
-}
-
-type BackboneMetric = {
-  domain: string;
-  avgCF: number;
-  cv: number;
-  role: string;
-};
-
-function parseBackboneMetricCsv(csvText: string): Record<number, BackboneMetric> {
-  const rows = csvText.split(/\r?\n/).filter(Boolean);
-  if (!rows.length) return {};
-  const header = rows[0].split(',').map((s) => s.trim());
-  const nodeIdx = header.indexOf('node');
-  const domainIdx = header.indexOf('domain');
-  const avgCfIdx = header.indexOf('avg_cf');
-  const cvIdx = header.indexOf('cv');
-  const roleIdx = header.indexOf('role_plot') >= 0 ? header.indexOf('role_plot') : header.indexOf('label');
-  const out: Record<number, BackboneMetric> = {};
-
-  for (const row of rows.slice(1)) {
-    const cols = row.split(',').map((s) => s.trim());
-    const node = Number(cols[nodeIdx]);
-    const avgCF = Number(cols[avgCfIdx]);
-    const cv = Number(cols[cvIdx]);
-    if (!Number.isFinite(node) || !Number.isFinite(avgCF) || !Number.isFinite(cv)) continue;
-    out[node] = {
-      domain: cols[domainIdx] ?? '',
-      avgCF,
-      cv,
-      role: cols[roleIdx] ?? ''
-    };
-  }
-  return out;
-}
-
-const modulesDir = path.join(process.cwd(), 'public', 'modules');
-const reportPath = path.join(modulesDir, 'module_analysis_report.txt');
-const reportModules = fs.existsSync(reportPath) ? parseModuleReport(fs.readFileSync(reportPath, 'utf8')) : {};
-const csvFiles = fs.existsSync(modulesDir) ? fs.readdirSync(modulesDir).filter((f) => f.endsWith('.csv')) : [];
-
-const edgesByPhase: Record<string, { source: string; target: string; weight: number }[]> = {};
-for (const file of csvFiles) {
-  const phaseChunk = file.replace(/^phase_/, '').replace(/_integrated_chord_diagram\.csv$/, '').replace(/_/g, ' ');
-  const phaseId = phaseIdFromText(phaseChunk);
-  if (!phaseId) continue;
-  const raw = fs.readFileSync(path.join(modulesDir, file), 'utf8');
-  edgesByPhase[phaseId] = parsePhaseCsv(raw);
-}
-
-const phaseModuleGraphs: PhaseGraph[] = phaseOrder.map((phaseId) => {
-  const edges = edgesByPhase[phaseId] ?? [];
-  const reportEntries = (reportModules[phaseId] ?? []).map((m) => ({ ...m }));
-  let modules = reportEntries;
-
-  if (!modules.length) {
-    const labels = Array.from(new Set(edges.flatMap((e) => [e.source, e.target]))).sort();
-    modules = labels.map((label) => ({ id: label, label, nodeCount: 0, nodes: [] }));
-  } else {
-    const edgeLabels = Array.from(new Set(edges.flatMap((e) => [e.source, e.target])));
-    const idCount: Record<string, number> = {};
-    modules.forEach((m) => { idCount[m.id] = (idCount[m.id] ?? 0) + 1; });
-    const duplicateIndices = modules
-      .map((m, idx) => ({ id: m.id, idx, nodeCount: m.nodeCount }))
-      .filter((x) => idCount[x.id] > 1)
-      .sort((a, b) => b.nodeCount - a.nodeCount)
-      .map((x) => x.idx);
-    const missingLabels = edgeLabels.filter((label) => !modules.some((m) => m.id === label));
-
-    duplicateIndices.forEach((moduleIdx, i) => {
-      if (!missingLabels[i]) return;
-      modules[moduleIdx].id = missingLabels[i];
-      modules[moduleIdx].label = missingLabels[i];
-    });
-
-    const afterFixMissing = edgeLabels.filter((label) => !modules.some((m) => m.id === label));
-    afterFixMissing.forEach((label) => {
-      modules.push({ id: label, label, nodeCount: 0, nodes: [] });
-    });
-  }
-
-  return {
-    phaseId,
-    moduleCount: modules.length,
-    modules,
-    edges
-  };
-});
-
-const phaseMetaList = phaseOrder.map((id) => phaseMeta[id]);
-const manuscriptPdfUrl = `${normalizedBaseUrl}pdfs/main.pdf`;
-const supplementaryPdfUrl = `${normalizedBaseUrl}pdfs/supplement.pdf`;
-const analysisRepoUrl = 'https://github.com/realfty/covid-mcn';
-const siteRepoUrl = 'https://github.com/zxzok/covid-mcn-site';
-const summaryCoreFigureUrl = `${normalizedBaseUrl}figs/Early%20phase%20vs%20Post-Omicron.svg`;
-const backboneFigureUrl = `${normalizedBaseUrl}figs/backbone.svg`;
-const macroContextRightFigureUrl = `${normalizedBaseUrl}figs/marco%20policy.svg`;
-const methodsPipelinePngUrl = `${normalizedBaseUrl}figs/fig1-600dpi.png`;
-const robustnessFigureUrl = `${normalizedBaseUrl}figs/robustness.svg`;
-const domainColorMap: Record<string, string> = {
-  STR: '#CC79A7',
-  EMO: '#E69F00',
-  CSF: '#56B4E9',
-  SPF: '#009E73',
-  PHY: '#D55E00'
-};
-const backboneNodeDefs = [
-  { id: 6, name: 'Self Control & Impulsivity', domain: 'EMO' },
-  { id: 13, name: 'Speech & Language', domain: 'CSF' },
-  { id: 16, name: 'Decision-making & Risk-taking', domain: 'EMO' },
-  { id: 25, name: 'Outlook & Optimism', domain: 'SPF' },
-  { id: 26, name: 'Selective Attention', domain: 'CSF' },
-  { id: 28, name: 'Fear & Anxiety', domain: 'STR' },
-  { id: 35, name: 'Nightmares', domain: 'STR' },
-  { id: 38, name: 'Suicidal Thoughts or Intentions', domain: 'STR' },
-  { id: 39, name: 'Experience of Pain', domain: 'STR' }
-];
-const backboneMetricPath = path.join(process.cwd(), 'public', 'acf-cv', 'backbone_table_main.csv');
-const backboneMetricMap = fs.existsSync(backboneMetricPath)
-  ? parseBackboneMetricCsv(fs.readFileSync(backboneMetricPath, 'utf8'))
-  : {};
-const backboneInterpretationMap: Record<number, { why: string; interpretation: string }> = {
-  6: {
-    why: 'Consistently high control frequency indicates emotion-regulation leverage remains central.',
-    interpretation: 'Self-control/impulsivity likely indexes immediate regulation pressure under prolonged stress.'
-  },
-  13: {
-    why: 'Cognitive-social language function remains inside the high-impact controller set.',
-    interpretation: 'Speech/language may reflect communication and executive coordination burden across phases.'
-  },
-  16: {
-    why: 'Decision risk control is repeatedly retained among backbone candidates.',
-    interpretation: 'Risk-taking governance can mediate how stress translates into behavior-level outcomes.'
-  },
-  25: {
-    why: 'A stable SPF anchor suggests adaptation-related regulation is not peripheral.',
-    interpretation: 'Outlook/optimism may provide cross-domain stabilization rather than isolated resilience.'
-  },
-  26: {
-    why: 'Selective attention stays influential despite broader control redistribution.',
-    interpretation: 'Attentional gating can shape which symptom circuits become active downstream.'
-  },
-  28: {
-    why: 'Fear/anxiety remains in the persistent core even when phase context changes.',
-    interpretation: 'This supports continuity of stress-linked control within a conserved scaffold.'
-  },
-  35: {
-    why: 'Nightmare-related disturbance is retained among key controllers in the STR cluster.',
-    interpretation: 'Sleep-disruption features may act as chronic stress amplifiers rather than transient effects.'
-  },
-  38: {
-    why: 'High-risk distress marker remains mapped to the backbone set.',
-    interpretation: 'Suicidal ideation signals may represent concentrated burden points requiring targeted attention.'
-  },
-  39: {
-    why: 'Experience of pain is persistently represented among high-control STR nodes.',
-    interpretation: 'Pain likely captures embodied stress load bridging psychological and physiological channels.'
-  }
-};
-const backboneNodesForView = backboneNodeDefs.map((node) => {
-  const metric = backboneMetricMap[node.id];
-  return {
-    ...node,
-    avgCF: metric ? metric.avgCF : null,
-    cv: metric ? metric.cv : null,
-    why: backboneInterpretationMap[node.id]?.why ?? 'Persistent inclusion in the backbone set across the cross-phase control landscape.',
-    interpretation: backboneInterpretationMap[node.id]?.interpretation ?? 'Supports core-symptom continuity within the manuscript interpretation framework.'
-  };
-});
 ---
-<html lang="en">
+<html lang={siteContent.metadata.lang}>
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Module Control in Youth Symptom Networks — Paper Website</title>
-  <meta name="description" content="Paper website for the manuscript: Module control in youth symptom networks across COVID-19" />
+  <title>{siteContent.metadata.title}</title>
+  <meta name="description" content={siteContent.metadata.description} />
   <style is:inline>
     @import url('https://fonts.googleapis.com/css2?family=DM+Serif+Display&family=IBM+Plex+Sans:wght@300;400;500&display=swap');
-
-    :root {
-      --bg: #f8fbff;
-      --card: #ffffff;
-      --accent: #1e40af;
-      --text: #0f172a;
-      --muted: #1f2937;
-      --border: #c8d8ee;
-      --footer-bg: #f0f6ff;
-      --str: #CC79A7;
-      --emo: #E69F00;
-      --csf: #56B4E9;
-      --spf: #009E73;
-      --phy: #D55E00;
-      --radius: 10px;
-    }
-
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html { scroll-behavior: smooth; }
-
-    body {
-      font-family: 'IBM Plex Sans', sans-serif;
-      background: var(--bg);
-      color: var(--text);
-      font-weight: 400;
-      line-height: 1.72;
-      font-size: 17px;
-      -webkit-font-smoothing: antialiased;
-    }
-
-    h1, h2, h3, h4 { font-family: 'DM Serif Display', serif; font-weight: 400; line-height: 1.2; }
-    a { color: var(--accent); text-decoration: none; }
-    a:hover { text-decoration: underline; }
-    img { max-width: 100%; height: auto; display: block; }
-    button { font-family: inherit; cursor: pointer; }
-
-    .wrap { width: min(1080px, calc(100vw - 48px)); margin: 0 auto; }
-    .sec-label { font-size: 0.78rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.16em; color: var(--accent); margin-bottom: 12px; }
-    .sec-title { font-size: clamp(1.6rem, 3.2vw, 2.4rem); margin-bottom: 12px; }
-    .sec-sub { color: var(--muted); font-size: clamp(0.98rem, 1.08vw, 1.1rem); max-width: 60ch; line-height: 1.72; }
-
-    /* ── Nav ── */
-    .site-nav { position: fixed; top: 0; left: 0; right: 0; z-index: 100; background: rgba(255,255,255,0.9); backdrop-filter: blur(20px) saturate(180%); -webkit-backdrop-filter: blur(20px) saturate(180%); border-bottom: 1px solid var(--border); }
-    .nav-inner { display: flex; align-items: center; justify-content: space-between; padding: 12px 0; }
-    .nav-brand { display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; font-weight: 500; font-size: 0.88rem; }
-    .nav-mark { width: 30px; height: 30px; border-radius: 7px; background: var(--accent); display: grid; place-items: center; font-weight: 500; font-size: 0.68rem; color: #fff; flex-shrink: 0; }
-    .nav-links { display: flex; gap: 4px; }
-    .nav-link { padding: 6px 14px; border-radius: 6px; color: var(--muted); font-size: 0.88rem; font-weight: 400; transition: all 0.2s; text-decoration: none; }
-    .nav-link:hover, .nav-link.active { color: var(--text); background: rgba(29,78,216,0.09); text-decoration: none; }
-    .nav-link.active { color: var(--accent); }
-
-    /* ── Hero ── */
-    .hero { min-height: 88vh; display: flex; flex-direction: column; justify-content: center; align-items: center; text-align: center; padding: 72px 24px 28px; position: relative; overflow: hidden; }
-    .hero::before { content: ''; position: absolute; top: -40%; left: -20%; width: 140%; height: 140%; background: radial-gradient(ellipse at 50% 30%, rgba(29,78,216,0.08) 0%, transparent 60%); pointer-events: none; }
-    .hero-overline { font-size: 0.76rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.22em; color: var(--accent); margin-bottom: 22px; opacity: 0; animation: fadeUp 0.8s 0.2s forwards; }
-    .hero-title { font-size: clamp(2.8rem, 7vw, 5rem); line-height: 1.06; margin-bottom: 22px; opacity: 0; animation: fadeUp 0.8s 0.4s forwards; }
-    .hero-title .amber { color: var(--accent); }
-    .hero-sub { font-size: clamp(1rem, 1.2vw, 1.12rem); color: var(--muted); max-width: 56ch; margin-bottom: 26px; line-height: 1.72; opacity: 0; animation: fadeUp 0.8s 0.6s forwards; }
-    .hero-ctas { display: flex; flex-wrap: wrap; gap: 10px; justify-content: center; margin-bottom: 28px; opacity: 0; animation: fadeUp 0.8s 0.7s forwards; }
-    .hero-cta { display: inline-flex; align-items: center; justify-content: center; padding: 9px 16px; border: 1px solid var(--border); border-radius: 999px; color: var(--text); font-size: 0.84rem; font-weight: 500; letter-spacing: 0.01em; text-decoration: none; background: rgba(255,255,255,0.72); transition: border-color 0.2s, transform 0.2s, background 0.2s; }
-    .hero-cta:hover { text-decoration: none; border-color: var(--accent); background: #fff; transform: translateY(-1px); }
-    .hero-cta-icon { width: 14px; height: 14px; display: inline-flex; align-items: center; justify-content: center; margin-right: 8px; color: var(--accent); flex-shrink: 0; }
-    .hero-cta-icon svg { width: 100%; height: 100%; display: block; }
-    .hero-stats { display: flex; gap: clamp(24px, 5vw, 56px); margin-bottom: 30px; opacity: 0; animation: fadeUp 0.8s 0.8s forwards; }
-    .h-stat { text-align: center; }
-    .h-stat-num { font-family: 'DM Serif Display', serif; font-size: clamp(1.8rem, 3.5vw, 2.6rem); line-height: 1.1; }
-    .h-stat-label { font-size: 0.78rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted); margin-top: 6px; }
-    .hero-domains { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-bottom: 36px; opacity: 0; animation: fadeUp 0.8s 1.0s forwards; }
-    .hdot { display: flex; align-items: center; gap: 6px; font-size: 0.84rem; color: var(--muted); }
-    .hdot i { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-    .scroll-arrow { position: absolute; bottom: 22px; left: 50%; transform: translateX(-50%); opacity: 0; animation: fadeUp 0.8s 1.2s forwards; display: inline-flex; flex-direction: column; align-items: center; gap: 6px; color: var(--muted); text-decoration: none; }
-    .scroll-arrow small { font-size: 0.64rem; text-transform: uppercase; letter-spacing: 0.14em; color: var(--muted); opacity: 0.9; }
-    .scroll-arrow i { display: block; width: 1px; height: 10px; background: var(--border); }
-    .scroll-arrow span { display: block; width: 14px; height: 14px; border-right: 2px solid var(--muted); border-bottom: 2px solid var(--muted); transform: rotate(45deg); animation: bounce 1.8s infinite; }
-    @keyframes fadeUp { from { opacity: 0; transform: translateY(28px); } to { opacity: 1; transform: translateY(0); } }
-    @keyframes bounce { 0%,100% { transform: rotate(45deg) translateY(0); } 50% { transform: rotate(45deg) translateY(8px); } }
-
-    /* ── Shared figures ── */
-    .fig-wrap { border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); background: var(--card); }
-    .fig-wrap img { width: 100%; display: block; }
-    .fig-cap { padding: 10px 14px; font-size: 0.84rem; color: var(--muted); border-top: 1px solid var(--border); }
-    /* SVG figures need light bg */
-    .svg-fig { border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); background: #f8f9fb; padding: 8px; }
-    .svg-fig img { width: 100%; display: block; border-radius: 6px; }
-    .svg-fig .fig-cap { background: var(--card); border-top: 1px solid var(--border); margin: 8px -8px -8px; padding: 10px 14px; border-radius: 0; }
-
-    /* ── Cards ── */
-    .s-card { background: var(--card); border: 1px solid var(--border); border-left: 3px solid var(--accent); border-radius: var(--radius); padding: clamp(20px, 2.5vw, 28px); position: relative; overflow: hidden; transition: transform 0.3s, box-shadow 0.3s; }
-    .s-card:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
-    .s-card-num { position: absolute; top: -8px; right: 12px; font-family: 'DM Serif Display', serif; font-size: 4rem; color: var(--accent); opacity: 0.07; line-height: 1; pointer-events: none; }
-    .s-card h4 { font-size: clamp(1rem, 1.1vw, 1.12rem); margin-bottom: 8px; }
-    .s-card p { font-size: clamp(0.86rem, 0.92vw, 0.94rem); color: var(--muted); line-height: 1.65; }
-
-    /* ── Grid layouts ── */
-    .g2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-    .g3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-    .g12 { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(16px, 3vw, 32px); align-items: start; }
-
-    /* ── Sections ── */
-    .sec { padding: clamp(60px, 8vw, 100px) 0; }
-
-    /* ── Phase timeline ── */
-    .timeline { display: flex; align-items: center; justify-content: space-between; position: relative; margin: 36px 0 32px; padding: 0 20px; }
-    .timeline::before { content: ''; position: absolute; top: 50%; left: 20px; right: 20px; height: 2px; background: var(--border); transform: translateY(-50%); }
-    .tl-node { position: relative; z-index: 1; background: none; border: 2px solid var(--muted); width: 44px; height: 44px; border-radius: 50%; display: flex; align-items: center; justify-content: center; cursor: pointer; transition: all 0.3s; color: var(--muted); font-size: 0.72rem; font-weight: 500; }
-    .tl-node.active { background: var(--accent); border-color: var(--accent); color: #fff; box-shadow: 0 0 20px rgba(29,78,216,0.25); }
-    .tl-node:hover:not(.active) { border-color: var(--accent); color: var(--accent); }
-    .tl-label { position: absolute; top: calc(100% + 8px); white-space: nowrap; font-size: 0.72rem; color: var(--muted); transition: color 0.3s; }
-    .tl-node.active .tl-label { color: var(--accent); font-weight: 500; }
-    .tl-date { position: absolute; bottom: calc(100% + 6px); white-space: nowrap; font-size: 0.64rem; color: var(--muted); opacity: 0.6; }
-
-    .info-panel { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: clamp(18px, 2.5vw, 28px); }
-    .pill-tag { display: inline-block; font-size: 0.72rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.12em; color: var(--accent); padding: 4px 10px; border: 1px solid rgba(29,78,216,0.25); border-radius: 999px; margin-bottom: 12px; }
-    .p-badge { font-size: 0.74rem; padding: 4px 10px; border-radius: 999px; background: rgba(29,78,216,0.08); border: 1px solid rgba(29,78,216,0.15); color: var(--muted); display: inline-block; margin-right: 6px; margin-bottom: 8px; }
-    .p-badge strong { color: var(--text); font-weight: 500; }
-    .selected-module { margin: 0 0 14px; font-size: 0.84rem; color: var(--muted); }
-    .selected-module strong { color: var(--accent); font-weight: 500; }
-    .sc-box { background: #f7fbff; border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
-    .sc-box h5 { font-size: 0.76rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); margin-bottom: 8px; display: flex; align-items: center; gap: 6px; }
-    .sc-box p { font-size: 0.86rem; color: var(--muted); line-height: 1.55; }
-    .phase-fig-transition { transition: opacity 0.4s ease; }
-    .phase-fig-transition.fading { opacity: 0.3; }
-    .svg-box { border-radius: var(--radius); overflow: hidden; border: 1px solid var(--border); background: var(--card); }
-    .phase-legend { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
-    .phase-legend h5 { font-size: 0.8rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em; color: var(--accent); margin-bottom: 10px; }
-    .legend-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 12px; }
-    .legend-item { display: flex; align-items: center; gap: 8px; font-size: 0.8rem; color: var(--muted); }
-    .legend-swatch { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
-    .phase-note { margin-top: 10px; font-size: 0.78rem; color: var(--muted); line-height: 1.6; }
-
-    /* ── Backbone ── */
-    .bb-list-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: clamp(18px, 2.5vw, 28px); }
-    .bb-list-card h4 { font-size: clamp(1.05rem, 1.2vw, 1.2rem); margin-bottom: 10px; }
-    .bb-list-note { font-size: 0.82rem; color: var(--muted); margin-bottom: 12px; }
-    .bb-node-list { list-style: none; display: grid; gap: 8px; }
-    .bb-node-btn { width: 100%; border: 1px solid var(--border); border-radius: 8px; background: #f8fbff; padding: 9px 12px; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 12px; text-align: left; transition: border-color 0.2s, box-shadow 0.2s, background 0.2s; }
-    .bb-node-btn:hover { border-color: rgba(29, 78, 216, 0.45); background: #ffffff; }
-    .bb-node-btn.active { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(29, 78, 216, 0.12); background: #ffffff; }
-    .bb-node-main { font-size: 0.9rem; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .bb-node-id { font-weight: 500; color: var(--accent); margin-right: 6px; }
-    .bb-node-meta { font-size: 0.76rem; color: var(--muted); display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
-    .bb-domain-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
-    .bb-detail { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: clamp(18px, 2.5vw, 28px); min-height: 180px; }
-    .bb-tag { display: inline-block; font-size: 0.7rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.1em; padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted); margin-right: 6px; margin-bottom: 12px; }
-    .bb-detail h4 { font-size: clamp(1.05rem, 1.2vw, 1.2rem); margin-bottom: 12px; }
-    .bb-detail p { font-size: 0.9rem; color: var(--muted); line-height: 1.65; margin-bottom: 10px; }
-    .bb-detail p strong { color: var(--text); font-weight: 500; }
-    .bb-metrics { font-size: 0.82rem; color: var(--muted); margin-bottom: 10px; }
-    .bb-right-col { display: flex; flex-direction: column; gap: 12px; }
-    .bb-fig-compact { max-width: 88%; margin: 0 auto; }
-    .macro-subhead { margin-top: 22px; margin-bottom: 10px; }
-    .macro-subhead h4 { font-size: clamp(1.02rem, 1.2vw, 1.16rem); margin-bottom: 8px; }
-    .macro-subhead p { font-size: 0.86rem; color: var(--muted); line-height: 1.62; max-width: 90ch; }
-    .macro-single-fig { max-width: 960px; margin: 0 auto; }
-    .macro-disclaimer { margin-top: 10px; font-size: 0.72rem; color: #64748b; line-height: 1.55; }
-    .macro-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: clamp(16px, 2vw, 22px); display: flex; gap: 12px; transition: transform 0.3s, box-shadow 0.3s; }
-    .macro-card:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
-    .macro-icon { width: 4px; border-radius: 2px; flex-shrink: 0; }
-    .macro-card h5 { font-size: 0.88rem; font-weight: 500; color: var(--text); margin-bottom: 6px; }
-    .macro-card p { font-size: 0.84rem; color: var(--muted); line-height: 1.55; }
-
-    /* ── Methods ── */
-    .pipeline-horizontal-wrap { overflow-x: auto; padding-bottom: 4px; }
-    .pipeline-horizontal { display: flex; gap: 12px; min-width: 1120px; align-items: stretch; }
-    .pipe-h-item { flex: 1 0 214px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); padding: 14px 14px 12px; position: relative; }
-    .pipe-h-item:not(:last-child)::after { content: '→'; position: absolute; right: -10px; top: 22px; font-size: 18px; color: #94a3b8; z-index: 2; }
-    .pipe-h-head { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
-    .pipe-num { width: 26px; height: 26px; border-radius: 50%; background: var(--accent); display: grid; place-items: center; font-size: 0.68rem; font-weight: 500; color: var(--bg); flex-shrink: 0; }
-    .pipe-h-item h5 { font-size: 0.86rem; font-weight: 500; color: var(--text); margin: 0; line-height: 1.35; }
-    .pipe-h-item p { font-size: 0.8rem; color: var(--muted); line-height: 1.52; margin: 0; }
-    .methods-figure-shell { width: min(1220px, calc(100vw - 64px)); margin: 30px auto 0; }
-    .methods-figure-card { border: 1px solid var(--border); border-radius: var(--radius); background: var(--card); overflow: hidden; }
-    .methods-png-view { width: 100%; height: auto; display: block; background: #fff; }
-    .methods-figure-actions { padding: 12px 14px 14px; border-top: 1px solid var(--border); background: #fbfdff; }
-    .methods-figure-btn { display: inline-flex; align-items: center; justify-content: center; padding: 9px 14px; border-radius: 999px; border: 1px solid var(--border); color: var(--text); font-size: 0.8rem; font-weight: 500; text-decoration: none; background: #fff; transition: border-color 0.2s, transform 0.2s; }
-    .methods-figure-btn:hover { border-color: var(--accent); text-decoration: none; transform: translateY(-1px); }
-
-    /* ── Robustness ── */
-    .rob-layout { display: grid; grid-template-columns: minmax(0, 1.28fr) minmax(280px, 0.72fr); gap: clamp(16px, 2.5vw, 24px); align-items: start; }
-    .rob-figure img { background: #fff; }
-    .rob-actions { padding: 12px 14px 14px; border-top: 1px solid var(--border); background: #fbfdff; }
-    .rob-supp-btn { display: inline-flex; align-items: center; justify-content: center; padding: 8px 14px; border-radius: 999px; border: 1px solid var(--border); color: var(--text); font-size: 0.78rem; font-weight: 500; text-decoration: none; background: #fff; transition: border-color 0.2s, transform 0.2s; }
-    .rob-supp-btn:hover { border-color: var(--accent); text-decoration: none; transform: translateY(-1px); }
-    .rob-right { display: grid; gap: 12px; }
-    .rob-note-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: clamp(14px, 1.8vw, 18px); }
-    .rob-note-card h5 { font-size: 0.86rem; font-weight: 500; color: var(--text); margin-bottom: 6px; line-height: 1.4; }
-    .rob-note-card p { font-size: 0.83rem; color: var(--muted); line-height: 1.6; margin: 0; }
-
-    /* ── Significance ── */
-    .sig-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: clamp(20px, 2.5vw, 28px); border-top: 3px solid var(--accent); transition: transform 0.3s, box-shadow 0.3s; }
-    .sig-card:hover { transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,0,0,0.3); }
-    .sig-card:nth-child(1) { border-top-color: var(--spf); }
-    .sig-card:nth-child(2) { border-top-color: var(--csf); }
-    .sig-card:nth-child(3) { border-top-color: var(--emo); }
-    .sig-cat { font-size: 0.68rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.16em; color: var(--accent); margin-bottom: 12px; }
-    .sig-card:nth-child(1) .sig-cat { color: var(--spf); }
-    .sig-card:nth-child(2) .sig-cat { color: var(--csf); }
-    .sig-card:nth-child(3) .sig-cat { color: var(--emo); }
-    .sig-card h4 { font-size: clamp(1rem, 1.1vw, 1.12rem); margin-bottom: 10px; }
-    .sig-card p { font-size: 0.9rem; color: var(--muted); line-height: 1.65; }
-
-    /* ── Quick Guide ── */
-    .qg-card { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: clamp(18px, 2.5vw, 28px); }
-    .qg-step { background: #f7fbff; border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; }
-    .qg-step h4 { font-size: 0.9rem; margin-bottom: 6px; }
-    .qg-step p { font-size: 0.86rem; color: var(--muted); margin: 0; line-height: 1.6; }
-    .qg-links { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 14px; }
-    .qg-link { display: inline-flex; align-items: center; gap: 8px; padding: 10px 14px; border-radius: 999px; border: 1px solid var(--border); color: var(--text); font-size: 0.82rem; font-weight: 500; text-decoration: none; transition: all 0.25s; }
-    .qg-link:hover { border-color: var(--accent); text-decoration: none; transform: translateY(-1px); }
-
-    /* ── Accordion ── */
-    .accord-item { border: 1px solid var(--border); border-radius: var(--radius); margin-bottom: 8px; overflow: hidden; background: var(--card); }
-    .accord-trigger { width: 100%; background: none; border: none; padding: 16px 20px; display: flex; justify-content: space-between; align-items: center; color: var(--text); font-size: 0.92rem; font-weight: 500; text-align: left; transition: color 0.2s; }
-    .accord-trigger:hover { color: var(--accent); }
-    .accord-icon { font-size: 1.2rem; color: var(--muted); transition: transform 0.3s; font-style: normal; }
-    .accord-item.open .accord-icon { transform: rotate(45deg); }
-    .accord-body { max-height: 0; overflow: hidden; transition: max-height 0.4s ease; }
-    .accord-item.open .accord-body { max-height: 300px; }
-    .accord-content { padding: 0 20px 18px; font-size: 0.88rem; color: var(--muted); line-height: 1.6; }
-
-    /* ── Footer ── */
-    .site-footer { background: var(--footer-bg); padding: clamp(48px, 6vw, 80px) 0 40px; border-top: 1px solid var(--border); }
-    .footer-label { font-size: 0.72rem; font-weight: 500; text-transform: uppercase; letter-spacing: 0.18em; color: var(--accent); margin-bottom: 20px; }
-    .gl-entry { background: #fff; border: 1px solid var(--border); border-radius: 8px; padding: 16px 18px; }
-    .gl-entry dt { font-family: 'DM Serif Display', serif; font-size: 0.96rem; margin-bottom: 6px; }
-    .gl-entry dt .tag { font-size: 0.64rem; font-weight: 500; color: var(--muted); background: rgba(74,96,128,0.2); padding: 2px 7px; border-radius: 4px; margin-left: 6px; vertical-align: middle; }
-    .gl-entry dd { font-size: 0.84rem; color: var(--muted); line-height: 1.55; }
-    .res-btn { display: flex; align-items: center; gap: 12px; padding: 16px 24px; border: 1px solid var(--border); border-radius: var(--radius); color: var(--text); text-decoration: none; font-size: 0.9rem; flex: 1; min-width: 180px; transition: all 0.25s; }
-    .res-btn:hover { border-color: var(--accent); transform: translateY(-2px); box-shadow: 0 8px 32px rgba(0,0,0,0.3); text-decoration: none; }
-    .res-btn-icon { width: 36px; height: 36px; border-radius: 8px; background: rgba(29,78,216,0.1); display: grid; place-items: center; font-size: 0.7rem; font-weight: 500; color: var(--accent); flex-shrink: 0; }
-    .phase-tip { position: fixed; z-index: 200; background: #0f172a; color: #fff; border-radius: 8px; padding: 6px 8px; font-size: 0.72rem; line-height: 1.35; pointer-events: none; opacity: 0; transform: translateY(4px); transition: opacity 0.12s ease, transform 0.12s ease; }
-    .phase-tip.visible { opacity: 1; transform: translateY(0); }
-    .module-detail { background: var(--card); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
-    .module-detail h4 { font-size: 1rem; margin-bottom: 6px; }
-    .module-meta { font-size: 0.82rem; color: var(--muted); margin-bottom: 12px; }
-    .module-empty { font-size: 0.84rem; color: var(--muted); }
-    .module-node-list { max-height: 190px; overflow: auto; display: flex; flex-wrap: wrap; gap: 8px; padding-right: 4px; }
-    .module-node-pill { border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px; font-size: 0.76rem; background: #f8fbff; color: var(--text); }
-    .res-btn-text span { display: block; font-size: 0.84rem; color: var(--muted); }
-    .citation { font-size: 0.84rem; color: var(--muted); line-height: 1.6; border-top: 1px solid var(--border); padding-top: 24px; max-width: 60ch; font-family: 'IBM Plex Sans', monospace; }
-
-    /* ── Scroll reveal ── */
-    .reveal { opacity: 0; transform: translateY(30px); transition: opacity 0.7s ease, transform 0.7s ease; }
-    .reveal.visible { opacity: 1; transform: translateY(0); }
-    .stagger > * { opacity: 0; transform: translateY(20px); transition: opacity 0.5s ease, transform 0.5s ease; }
-    .stagger.visible > *:nth-child(1) { transition-delay: 0s; opacity: 1; transform: none; }
-    .stagger.visible > *:nth-child(2) { transition-delay: 0.08s; opacity: 1; transform: none; }
-    .stagger.visible > *:nth-child(3) { transition-delay: 0.12s; opacity: 1; transform: none; }
-    .stagger.visible > *:nth-child(4) { transition-delay: 0.18s; opacity: 1; transform: none; }
-    .stagger.visible > *:nth-child(5) { transition-delay: 0.24s; opacity: 1; transform: none; }
-
-    /* ── Utility ── */
-    .mt16 { margin-top: 16px; } .mt24 { margin-top: 24px; } .mt36 { margin-top: 36px; }
-    .gap8 { gap: 8px; } .gap12 { gap: 12px; } .gap16 { gap: 16px; }
-    .flex-col { display: flex; flex-direction: column; }
-
-    /* ── Responsive ── */
-    @media (max-width: 768px) {
-      .nav-links { display: none; }
-      .hero { min-height: 82vh; padding-top: 64px; }
-      .hero-ctas { gap: 8px; }
-      .hero-cta { width: 100%; max-width: 320px; }
-      .hero-stats { gap: 20px; flex-wrap: wrap; justify-content: center; }
-      .g2, .g12 { grid-template-columns: 1fr; }
-      .g3 { grid-template-columns: 1fr; }
-      .timeline { overflow-x: auto; justify-content: flex-start; padding-bottom: 32px; -webkit-overflow-scrolling: touch; }
-      .timeline::before { display: none; }
-      .tl-node { flex-shrink: 0; margin: 0 16px; }
-      .wrap { width: calc(100vw - 32px); }
-      .methods-figure-shell { width: calc(100vw - 32px); }
-      .pipeline-horizontal { min-width: 980px; }
-      .rob-layout { grid-template-columns: 1fr; }
-    }
+    :root{--bg:#f8fbff;--card:#fff;--ink:#0f172a;--muted:#475569;--line:#c8d8ee;--accent:#1e40af;--str:#cc79a7;--emo:#e69f00;--csf:#56b4e9;--spf:#009e73;--phy:#d55e00}
+    *{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.7 'IBM Plex Sans',sans-serif}h1,h2,h3,h4{font-family:'DM Serif Display',serif;line-height:1.1;margin:0 0 .7rem}a{color:var(--accent);text-decoration:none}img{max-width:100%;display:block}
+    .wrap{width:min(1100px,calc(100vw - 40px));margin:0 auto}.nav{position:sticky;top:0;z-index:10;background:rgba(255,255,255,.9);backdrop-filter:blur(18px);border-bottom:1px solid var(--line)}.nav .wrap{display:flex;justify-content:space-between;align-items:center;padding:12px 0}.brand{display:flex;gap:10px;align-items:center;color:var(--ink)}.mark{width:30px;height:30px;border-radius:8px;background:var(--accent);color:#fff;display:grid;place-items:center;font-size:.72rem}.links{display:flex;gap:10px;flex-wrap:wrap}.links a{padding:6px 12px;border-radius:999px;color:var(--muted)}.links a:hover{background:#eef4ff;color:var(--accent)}
+    .hero{padding:88px 0 56px;text-align:center}.kicker{font-size:.75rem;letter-spacing:.22em;text-transform:uppercase;color:var(--accent)}.hero h1{font-size:clamp(2.8rem,7vw,5rem)}.hero .accent{color:var(--accent)}.hero p{max-width:60ch;margin:0 auto 22px;color:var(--muted)}.btns,.stats,.domains,.resources{display:flex;gap:12px;justify-content:center;flex-wrap:wrap}.btn,.res{border:1px solid var(--line);background:#fff;border-radius:999px;padding:10px 16px}.stats{margin:26px 0}.stat strong{display:block;font:clamp(1.7rem,3.4vw,2.5rem)/1 'DM Serif Display',serif}.stat span{font-size:.74rem;color:var(--muted);letter-spacing:.1em;text-transform:uppercase}.domains span{display:inline-flex;gap:8px;align-items:center;color:var(--muted)}.domains i{width:10px;height:10px;border-radius:50%}
+    section{padding:56px 0}.head{margin-bottom:24px}.head .label{font-size:.74rem;letter-spacing:.18em;text-transform:uppercase;color:var(--accent)}.head p{max-width:64ch;color:var(--muted)}.grid2,.grid3{display:grid;gap:16px}.grid2{grid-template-columns:repeat(2,minmax(0,1fr))}.grid3{grid-template-columns:repeat(3,minmax(0,1fr))}.card,.figure,.res,.gloss{background:var(--card);border:1px solid var(--line);border-radius:16px}.card,.gloss{padding:20px}.figure{overflow:hidden}.cap{padding:10px 14px;border-top:1px solid var(--line);color:var(--muted);font-size:.84rem}.res{display:flex;gap:12px;align-items:center;padding:16px}.icon{width:36px;height:36px;border-radius:10px;background:#eef4ff;color:var(--accent);display:grid;place-items:center;font-size:.72rem}.res span,.gloss dd{color:var(--muted);font-size:.84rem}.citation{margin-top:28px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:.84rem}
+    @media (max-width:960px){.grid2,.grid3{grid-template-columns:1fr}.links{display:none}}
   </style>
 </head>
 <body>
-
-<!-- NAV -->
-<nav class="site-nav">
-  <div class="wrap nav-inner">
-    <a href="#" class="nav-brand"><span class="nav-mark">MC</span> Fan &amp; Zhang · Nanjing Medical Univ.</a>
-    <div class="nav-links">
-      <a class="nav-link" href="#summary">Summary</a>
-      <a class="nav-link" href="#phases">Phases</a>
-      <a class="nav-link" href="#backbone">Backbone</a>
-      <a class="nav-link" href="#methods">Methods</a>
-      <a class="nav-link" href="#robustness">Robustness</a>
-      <a class="nav-link" href="#significance">Significance</a>
-      <a class="nav-link" href="#resources">Resources</a>
+  <nav class="nav">
+    <div class="wrap">
+      <a href="#" class="brand"><span class="mark">{siteContent.nav.brandMark}</span>{siteContent.nav.brandText}</a>
+      <div class="links">{siteContent.nav.links.map((link) => <a href={link.href}>{link.label}</a>)}</div>
     </div>
-  </div>
-</nav>
+  </nav>
 
-<!-- 1 HERO -->
-<section class="hero">
-  <div class="hero-overline">Research Paper Website</div>
-  <h1 class="hero-title">Same scaffold,<br/><span class="amber">different controllers.</span></h1>
-  <p class="hero-sub">Across five phases of the COVID-19 pandemic, youth symptom networks preserved a broadly similar modular architecture while the distribution of control shifted from an early stress-centered configuration toward a later cross-domain pattern.</p>
-  <div class="hero-ctas">
-    <a class="hero-cta" href={manuscriptPdfUrl} target="_blank" rel="noopener noreferrer">
-      <span class="hero-cta-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-          <polyline points="14 2 14 8 20 8"></polyline>
-          <path d="M8 15h8"></path>
-          <path d="M8 11h3"></path>
-        </svg>
-      </span>
-      Open Manuscript PDF
-    </a>
-    <a class="hero-cta" href={supplementaryPdfUrl} target="_blank" rel="noopener noreferrer">
-      <span class="hero-cta-icon" aria-hidden="true">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
-          <polyline points="14 2 14 8 20 8"></polyline>
-          <path d="M8 15h8"></path>
-          <path d="M8 11h3"></path>
-        </svg>
-      </span>
-      Open Supplementary PDF
-    </a>
-    <a class="hero-cta" href={analysisRepoUrl} target="_blank" rel="noopener noreferrer">
-      <span class="hero-cta-icon" aria-hidden="true">
-        <svg viewBox="0 0 16 16" fill="currentColor">
-          <path d="M8 0a8 8 0 0 0-2.53 15.59c.4.07.55-.17.55-.38l-.01-1.49c-2.01.44-2.53-.49-2.69-.94a2.82 2.82 0 0 0-1.16-1.56c-.39-.21-.94-.73-.01-.75.87-.01 1.49.8 1.7 1.13.99 1.67 2.57 1.2 3.2.92.1-.72.39-1.2.71-1.48-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.58.82-2.14-.08-.2-.36-1.02.08-2.12 0 0 .67-.22 2.2.82a7.48 7.48 0 0 1 4 0c1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.14 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48l-.01 2.2c0 .21.15.46.55.38A8 8 0 0 0 8 0Z"></path>
-        </svg>
-      </span>
-      View Analysis Code
-    </a>
-  </div>
-  <div class="hero-stats">
-    <div class="h-stat"><div class="h-stat-num" data-target="14181">0</div><div class="h-stat-label">U.S. young adults</div></div>
-    <div class="h-stat"><div class="h-stat-num" data-target="47">0</div><div class="h-stat-label">MHQ symptoms</div></div>
-    <div class="h-stat"><div class="h-stat-num" data-target="5">0</div><div class="h-stat-label">Pandemic phases</div></div>
-    <div class="h-stat"><div class="h-stat-num" data-target="4">0</div><div class="h-stat-label">Symptom domains</div></div>
-  </div>
-  <div class="hero-domains">
-    <span class="hdot"><i style="background:var(--str)"></i> Stress Response</span>
-    <span class="hdot"><i style="background:var(--emo)"></i> Emotional Regulation</span>
-    <span class="hdot"><i style="background:var(--csf)"></i> Cognitive &amp; Social</span>
-    <span class="hdot"><i style="background:var(--spf)"></i> Self-perception &amp; Physiological</span>
-  </div>
-  <a href="#summary" class="scroll-arrow"><small>Scroll</small><i></i><span></span></a>
-</section>
-
-<!-- 2 SUMMARY -->
-<section id="summary" class="sec">
-  <div class="wrap">
-    <div class="reveal"><div class="sec-label">Summary</div><h2 class="sec-title">Core findings at a glance.</h2><p class="sec-sub">The manuscript asks whether COVID-19 changed youth symptom architecture itself, or mainly changed where control sits within a conserved mesoscale scaffold.</p></div>
-    <div class="g2 stagger mt36">
-      <div class="s-card reveal"><span class="s-card-num">01</span><h4>Study question</h4><p>Do youth symptom networks undergo structural reorganization across pandemic phases, or retain a stable modular scaffold with shifting control allocation?</p></div>
-      <div class="s-card reveal"><span class="s-card-num">02</span><h4>Data and design</h4><p>Repeated cross-sections of U.S. young adults (18–24 years; n = 14,181) across five phases, 47 MHQ symptoms, with an independent India replication cohort.</p></div>
-      <div class="s-card reveal"><span class="s-card-num">03</span><h4>Main result</h4><p>Mesoscale module structure is broadly conserved, while dominant control shifts from early stress-centered governance toward later cross-domain distribution.</p></div>
-      <div class="s-card reveal"><span class="s-card-num">04</span><h4>Reliability signal</h4><p>Under bootstrap and case-dropping tests, AMCS is substantially more stable than ACF, supporting AMCS as the primary metric for cross-phase interpretation.</p></div>
-    </div>
-    <div class="mt24 reveal">
-      <div class="fig-wrap"><img src={summaryCoreFigureUrl} alt="Early phase versus Post-Omicron network comparison" loading="lazy" /><div class="fig-cap">Early phase vs Post-Omicron — the broad modular scaffold is retained while high-control nodes redistribute across domains.</div></div>
-    </div>
-  </div>
-</section>
-
-<!-- 3 PHASES -->
-<section id="phases" class="sec">
-  <div class="wrap">
-    <div class="reveal"><div class="sec-label">Interactive Phase Explorer</div><h2 class="sec-title">How control migrated across five phases.</h2><p class="sec-sub">Click each phase to compare what stayed stable and what changed in the symptom network's control architecture.</p></div>
-    <div class="timeline reveal" id="timeline"></div>
-    <div class="g12 reveal" style="margin-top:40px">
-      <div class="flex-col gap12">
-        <div class="info-panel">
-          <div id="pBadges"></div>
-          <p class="selected-module" id="selectedModule">Selected module: <strong>None</strong></p>
-          <div class="pill-tag" id="pRegime"></div>
-          <h3 style="font-size:clamp(1.02rem,1.2vw,1.18rem);margin-bottom:10px;line-height:1.35" id="pHeadline"></h3>
-          <p style="font-size:0.9rem;color:var(--muted);margin-bottom:20px" id="pContext"></p>
-          <div class="g2">
-            <div class="sc-box"><h5><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg> Stays stable</h5><p id="pStable"></p></div>
-            <div class="sc-box"><h5><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg> Changes here</h5><p id="pChange"></p></div>
-          </div>
-        </div>
-        <div class="phase-legend">
-          <h5>Module color legend</h5>
-          <div class="legend-grid">
-            <div class="legend-item"><span class="legend-swatch" style="background:var(--str)"></span> STR · Stress</div>
-            <div class="legend-item"><span class="legend-swatch" style="background:var(--emo)"></span> EMO · Emotion</div>
-            <div class="legend-item"><span class="legend-swatch" style="background:var(--csf)"></span> CSF · Cognitive-social</div>
-            <div class="legend-item"><span class="legend-swatch" style="background:var(--spf)"></span> SPF · Self/physiology</div>
-            <div class="legend-item"><span class="legend-swatch" style="background:var(--phy)"></span> PHY · Physiological</div>
-          </div>
-          <p class="phase-note">Node index explanations are provided in the supplementary material.</p>
-        </div>
-        <div class="fig-wrap phase-fig-transition" id="phaseNetworkFig">
-          <img id="phaseNetworkImg" src={phaseMetaList[0].networkFigure} alt={`${phaseMetaList[0].label} phase network figure`} loading="lazy" />
-          <div class="fig-cap" id="phaseNetworkCap">{phaseMetaList[0].networkCaption}</div>
-        </div>
+  <section class="hero">
+    <div class="wrap">
+      <div class="kicker">{siteContent.hero.overline}</div>
+      <h1>{siteContent.hero.titleLead}<br /><span class="accent">{siteContent.hero.titleAccent}</span></h1>
+      <p>{siteContent.hero.summary}</p>
+      <div class="btns">
+        {siteContent.hero.ctas.map((cta) => (
+          <a class="btn" href={resourceHrefByKind[cta.kind]} target="_blank" rel="noopener noreferrer">{cta.label}</a>
+        ))}
       </div>
-      <div class="flex-col gap12">
-        <div class="svg-box"><svg id="networkSvg" viewBox="0 0 480 360" width="100%" height="auto" aria-label="Module control network"></svg></div>
-        <div class="module-detail" id="moduleDetail">
-          <p class="module-empty">Click a module node in the graph to view node details.</p>
-        </div>
-        <div class="fig-wrap phase-fig-transition" id="phaseChordFig">
-          <img id="phaseChordImg" src={phaseMetaList[0].chordFigure} alt={`${phaseMetaList[0].label} phase module chord diagram`} loading="lazy" />
-          <div class="fig-cap" id="phaseChordCap">{phaseMetaList[0].chordCaption}</div>
-        </div>
+      <div class="stats">
+        {siteContent.hero.stats.map((stat) => (
+          <div class="stat"><strong>{stat.value.toLocaleString()}</strong><span>{stat.label}</span></div>
+        ))}
+      </div>
+      <div class="domains">
+        {siteContent.hero.domains.map((domain) => (
+          <span><i style={`background:${domain.colorVar}`}></i>{domain.label}</span>
+        ))}
       </div>
     </div>
-  </div>
-</section>
-<div class="phase-tip" id="phaseTip"></div>
+  </section>
 
-<!-- 4 BACKBONE -->
-<section id="backbone" class="sec">
-  <div class="wrap">
-    <div class="reveal"><div class="sec-label">Backbone Symptoms</div><h2 class="sec-title">Controlled migration around a persistent core.</h2><p class="sec-sub">Stable backbone controllers persist across phases, while macro context is carefully framed as associational, not causal.</p></div>
-    <div class="g12 mt36 reveal">
-      <div class="bb-list-card">
-        <h4>Backbone nodes (ID + label)</h4>
-        <p class="bb-list-note">Manuscript-defined backbone nodes. avg CF and CV are summarized from the figure on the right.</p>
-        <ul class="bb-node-list">
-          {backboneNodesForView.map((node, idx) => (
-            <li>
-              <button class={`bb-node-btn${idx === 0 ? ' active' : ''}`} type="button" data-bb-node={node.id}>
-                <span class="bb-node-main"><span class="bb-node-id">#{node.id}</span>{node.name}</span>
-                <span class="bb-node-meta">
-                  <span class="bb-domain-dot" style={`background:${domainColorMap[node.domain] ?? '#64748b'}`}></span>
-                  {node.domain} · avg CF: {node.avgCF !== null ? node.avgCF.toFixed(3) : 'N/A'} · CV: {node.cv !== null ? node.cv.toFixed(3) : 'N/A'}
-                </span>
-              </button>
-            </li>
+  <section id="summary">
+    <div class="wrap">
+      <div class="head">
+        <div class="label">{siteContent.summary.label}</div>
+        <h2>{siteContent.summary.title}</h2>
+        <p>{siteContent.summary.subtitle}</p>
+      </div>
+      <div class="grid2">
+        {siteContent.summary.cards.map((card) => (
+          <div class="card"><h4>{card.number} {card.title}</h4><p>{card.body}</p></div>
+        ))}
+      </div>
+      <div class="figure" style="margin-top:16px">
+        <img src={assetUrl(siteContent.assetPaths.summaryCoreFigure)} alt="Summary figure" />
+        <div class="cap">{siteContent.summary.figureCaption}</div>
+      </div>
+    </div>
+  </section>
+
+  <section id="phases">
+    <div class="wrap">
+      <div class="head">
+        <div class="label">{siteContent.phases.label}</div>
+        <h2>{siteContent.phases.title}</h2>
+        <p>{siteContent.phases.subtitle}</p>
+      </div>
+      <div class="grid3">
+        {siteContent.phases.legendItems.map((item) => (
+          <div class="card">
+            <div class="label" style={`color:${item.colorVar}`}>{item.short}</div>
+            <h4>{item.label}</h4>
+            <p>{siteContent.phases.legendNote}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  </section>
+
+  <section id="backbone">
+    <div class="wrap">
+      <div class="head">
+        <div class="label">{siteContent.backbone.label}</div>
+        <h2>{siteContent.backbone.title}</h2>
+        <p>{siteContent.backbone.subtitle}</p>
+      </div>
+      <div class="grid2">
+        <div class="card">
+          <h4>{siteContent.backbone.listTitle}</h4>
+          <p>{siteContent.backbone.listNote}</p>
+          {siteContent.backbone.detailTags.map((tag) => (
+            <span class="btn" style="display:inline-block;margin:0 8px 8px 0;padding:4px 10px">{tag}</span>
           ))}
-        </ul>
-      </div>
-      <div class="bb-right-col">
-        <div class="bb-detail" id="bbDetail">
-          <span class="bb-tag">Backbone set</span>
-          <span class="bb-tag">Node interpretation</span>
-          <h4>#6 Self Control &amp; Impulsivity</h4>
-          <p class="bb-metrics">Domain: EMO · avg CF: 0.255589 · CV: 0.140075</p>
-          <p><strong>Why:</strong> Consistently high control frequency indicates emotion-regulation leverage remains central.</p>
-          <p><strong>Interpretation:</strong> Self-control/impulsivity likely indexes immediate regulation pressure under prolonged stress.</p>
+          {[
+            'PSS12 showed the highest recurring structural coverage frequency (0.750).',
+            'Stress and sleep indicators appeared repeatedly in minimal structural coverage solutions.',
+            'Negative stress showed the strongest outbound AMCS pathway to positive stress (0.643).',
+            'Sleep showed notable outbound coverage to anxiety (0.347) and depression (0.312).',
+            'Anxiety also showed substantial coverage toward depression (0.438).',
+          ].map((item) => <div style="padding:8px 0;border-top:1px solid var(--line)">{item}</div>)}
         </div>
-        <div class="fig-wrap bb-fig-compact"><img src={backboneFigureUrl} alt="Backbone CV-CF figure from manuscript" loading="lazy" /><div class="fig-cap">Backbone figure (manuscript original). Node index explanations are provided in the supplementary materials.</div></div>
+        <div class="figure">
+          <img src={assetUrl(siteContent.assetPaths.backboneFigure)} alt="Backbone figure" />
+          <div class="cap">{siteContent.backbone.figureCaption}</div>
+        </div>
+      </div>
+      <div class="grid3" style="margin-top:16px">
+        {siteContent.backbone.macroCards.map((card) => <div class="card"><h4>{card.title}</h4><p>{card.body}</p></div>)}
+      </div>
+      <div class="card" style="margin-top:16px"><p>{siteContent.backbone.macroDisclaimer}</p></div>
+    </div>
+  </section>
+
+  <section id="methods">
+    <div class="wrap">
+      <div class="head">
+        <div class="label">{siteContent.methods.label}</div>
+        <h2>{siteContent.methods.title}</h2>
+        <p>{siteContent.methods.subtitle}</p>
+      </div>
+      <div class="grid3">
+        {siteContent.methods.steps.map((step) => <div class="card"><h4>{step.number} {step.title}</h4><p>{step.body}</p></div>)}
       </div>
     </div>
-    <div class="macro-subhead reveal">
-      <h4>Macro context and exploratory policy alignment</h4>
-      <p>These analyses do not establish causality, but they help place phase-wise control migration within the broader organization of daily life during the pandemic.</p>
-    </div>
-    <div class="g3 stagger mt16 reveal">
-      <div class="macro-card"><div class="macro-icon" style="background:var(--str)"></div><div><h5>Policy variables may be more proximal than case counts</h5><p>Infection counts reflect epidemiological pressure, but policies shape schooling, mobility, and social routines that more directly structure young people’s daily experience.</p></div></div>
-      <div class="macro-card"><div class="macro-icon" style="background:var(--emo)"></div><div><h5>Lagged associations are exploratory</h5><p>Weekly symptom trajectories were compared with lagged macro indicators to identify plausible time scales of alignment, not to infer that specific policies produced specific symptoms.</p></div></div>
-      <div class="macro-card"><div class="macro-icon" style="background:var(--csf)"></div><div><h5>Restrictions appeared more often than cases in top links</h5><p>Domestic movement restrictions and home-confinement measures were more frequently represented among the strongest lagged associations than case counts or deaths.</p></div></div>
-    </div>
-    <div class="mt24 reveal">
-      <div class="fig-wrap macro-single-fig"><img src={macroContextRightFigureUrl} alt="Macro policy context and exploratory lagged alignments" loading="lazy" /><div class="fig-cap">Macro context from 2020 to 2023 — case counts and policy stringency did not always move together, especially in later phases.</div></div>
-    </div>
-    <p class="macro-disclaimer reveal">Pre-whitening attenuated several associations, so this section is presented as contextual and exploratory rather than confirmatory.</p>
-  </div>
-</section>
+  </section>
 
-<!-- 5 METHODS -->
-<section id="methods" class="sec">
-  <div class="wrap">
-    <div class="reveal"><div class="sec-label">Method</div><h2 class="sec-title">Transparent pipeline from raw responses to robust claims.</h2><p class="sec-sub">The workflow is designed to separate structural continuity from control redistribution, then test whether reported metrics remain interpretable under perturbation.</p></div>
-    <div class="mt36 reveal">
-      <div class="pipeline-horizontal-wrap">
-        <div class="pipeline-horizontal">
-          <div class="pipe-h-item">
-            <div class="pipe-h-head"><div class="pipe-num">1</div><h5>Phase-stratified repeated cross-sections</h5></div>
-            <p>Observations are grouped into five pandemic periods to compare population-level states over time without implying within-person trajectories.</p>
-          </div>
-          <div class="pipe-h-item">
-            <div class="pipe-h-head"><div class="pipe-num">2</div><h5>Per-phase network estimation</h5></div>
-            <p>Gaussian graphical models (graphical LASSO) estimate conditional-dependence symptom networks for each phase using the same 47-item MHQ space.</p>
-          </div>
-          <div class="pipe-h-item">
-            <div class="pipe-h-head"><div class="pipe-num">3</div><h5>Community detection with fixed interpretive mapping</h5></div>
-            <p>Weighted Louvain identifies module partitions; modules are interpreted against a fixed STR/EMO/CSF/SPF framework for cross-phase comparability.</p>
-          </div>
-          <div class="pipe-h-item">
-            <div class="pipe-h-head"><div class="pipe-num">4</div><h5>Exact domination-based control quantification</h5></div>
-            <p>All minimum-cardinality dominating sets are enumerated exactly, then summarized as node-level CF and module-level ACF/AMCS to track control flow.</p>
-          </div>
-          <div class="pipe-h-item">
-            <div class="pipe-h-head"><div class="pipe-num">5</div><h5>Robustness and external replication</h5></div>
-            <p>Bootstrap, case-dropping stability, and India replication are used to identify which findings are stable (especially AMCS) versus sensitive (notably ACF).</p>
-          </div>
+  <section id="robustness">
+    <div class="wrap">
+      <div class="head">
+        <div class="label">{siteContent.robustness.label}</div>
+        <h2>{siteContent.robustness.title}</h2>
+        <p>{siteContent.robustness.subtitle}</p>
+      </div>
+      <div class="grid2">
+        <div class="figure">
+          <img src={assetUrl(siteContent.assetPaths.robustnessFigure)} alt="Results figure" />
+          <div class="cap">{siteContent.robustness.figureCaption}</div>
+        </div>
+        <div class="grid2">
+          {siteContent.robustness.notes.map((note) => <div class="card"><h4>{note.title}</h4><p>{note.body}</p></div>)}
         </div>
       </div>
     </div>
-  </div>
-  <div class="methods-figure-shell reveal">
-    <div class="methods-figure-card">
-      <img class="methods-png-view" src={methodsPipelinePngUrl} alt="Full analytic pipeline" loading="lazy" />
-      <div class="fig-cap">Fig. 1 — Phase-stratified network estimation, community detection, exact MDS enumeration, module-level control quantification, and fixed domain alignment.</div>
-      <div class="methods-figure-actions">
-        <a class="methods-figure-btn" href={methodsPipelinePngUrl} target="_blank" rel="noopener noreferrer">Open full pipeline figure</a>
+  </section>
+
+  <section id="significance">
+    <div class="wrap">
+      <div class="head">
+        <div class="label">{siteContent.significance.label}</div>
+        <h2>{siteContent.significance.title}</h2>
+      </div>
+      <div class="grid3">
+        {siteContent.significance.cards.map((card) => (
+          <div class="card"><div class="label">{card.category}</div><h4>{card.title}</h4><p>{card.body}</p></div>
+        ))}
+      </div>
+      <div class="grid2" style="margin-top:16px">
+        {siteContent.significance.limits.map((limit) => <div class="card"><h4>{limit.title}</h4><p>{limit.body}</p></div>)}
       </div>
     </div>
-  </div>
-</section>
+  </section>
 
-<!-- 6 ROBUSTNESS (new dedicated section) -->
-<section id="robustness" class="sec">
-  <div class="wrap">
-    <div class="reveal"><div class="sec-label">Robustness</div><h2 class="sec-title">Metric stability under resampling.</h2><p class="sec-sub">Bootstrap resampling and case-dropping analyses show that the main signal is not driven by a single sample draw: graph density, exact dominating-set summaries, node strength, and AMCS remain broadly stable, while ACF is more sensitive to case loss.</p></div>
-    <div class="rob-layout mt36 reveal">
-      <div>
-        <div class="fig-wrap rob-figure">
-          <img src={robustnessFigureUrl} alt="Robustness composite figure" loading="lazy" />
-          <div class="fig-cap">Robustness overview. Panels A–B show bootstrap distributions for edge counts and exact MDS-set counts in representative bookend phases (Early and Post-Omicron). Panel C shows case-dropping stability for node strength, AMCS, and ACF. Panels D–E summarize MDS size and module-count distributions across all phases.</div>
-          <div class="rob-actions">
-            <a class="rob-supp-btn" href={supplementaryPdfUrl} target="_blank" rel="noopener noreferrer">Open full supplementary PDF</a>
-          </div>
-        </div>
+  <footer id="resources">
+    <div class="wrap">
+      <div class="head"><div class="label">{siteContent.glossary.label}</div></div>
+      <div class="grid2">
+        {siteContent.glossary.items.map((item) => (
+          <dl class="gloss"><dt><strong>{item.term}</strong>{item.tag ? ` (${item.tag})` : ''}</dt><dd>{item.body}</dd></dl>
+        ))}
       </div>
-      <div class="rob-right">
-        <div class="rob-note-card">
-          <h5>Edge support is stable under bootstrap</h5>
-          <p>Full-sample edge counts fall within the bootstrap distributions in representative bookend phases, suggesting that the estimated graph density is not driven by a single sample draw.</p>
-        </div>
-        <div class="rob-note-card">
-          <h5>Exact dominating-set solutions remain well-behaved</h5>
-          <p>The number of exact minimum dominating sets varies across resamples, but full-sample values remain inside the bootstrap range rather than appearing as outliers.</p>
-        </div>
-        <div class="rob-note-card">
-          <h5>Strength and AMCS are robust; ACF is more case-sensitive</h5>
-          <p>Under case-dropping, node strength remains most stable and AMCS stays interpretable, whereas ACF declines more quickly with sample loss.</p>
-        </div>
-        <div class="rob-note-card">
-          <h5>MDS size and module count stay concentrated</h5>
-          <p>Across phases, MDS size remains concentrated around 4, and community solutions are mostly confined to 4–5 modules rather than scattering broadly.</p>
-        </div>
+      <div class="head" style="margin-top:28px"><div class="label">{siteContent.resources.label}</div></div>
+      <div class="resources">
+        {siteContent.resources.items.map((item) => (
+          <a class="res" href={resourceHrefByKind[item.kind]} target="_blank" rel="noopener noreferrer">
+            <span class="icon">{item.icon}</span>
+            <div><strong>{item.title}</strong><span>{item.body}</span></div>
+          </a>
+        ))}
       </div>
+      <div class="citation">{siteContent.resources.citation}</div>
     </div>
-  </div>
-</section>
-
-<!-- 7 SIGNIFICANCE -->
-<section id="significance" class="sec">
-  <div class="wrap">
-    <div class="reveal"><div class="sec-label">Why This Matters</div><h2 class="sec-title">Key implications at a glance.</h2></div>
-    <div class="g3 stagger mt36 reveal">
-      <div class="sig-card"><div class="sig-cat">Substantive</div><h4>System organization, not just prevalence</h4><p>Reframes youth mental health under prolonged crisis from symptom burden to system architecture, highlighting how control reallocates over a conserved scaffold.</p></div>
-      <div class="sig-card"><div class="sig-cat">Methodological</div><h4>Module control with exact enumeration</h4><p>Introduces an interpretable framework based on exact minimum-dominating-set enumeration, enabling direct comparison of node-, module-, and domain-level control structure.</p></div>
-      <div class="sig-card"><div class="sig-cat">Translational</div><h4>Phase-aware interpretation of risk</h4><p>Control is concentrated early but distributes later, suggesting that mental-health burden should be interpreted in relation to shifting contextual demands rather than a fixed response pattern.</p></div>
-    </div>
-    <div class="mt36 reveal">
-      <h3 style="font-size:clamp(1.1rem,1.3vw,1.3rem);margin-bottom:16px">Interpretive boundaries</h3>
-      <div class="accord-item"><button class="accord-trigger">Not within-person longitudinal <i class="accord-icon">+</i></button><div class="accord-body"><div class="accord-content">Repeated cross-sections are compared across phases, so the study does not track within-person symptom trajectories or person-level change over time.</div></div></div>
-      <div class="accord-item"><button class="accord-trigger">Edges ≠ causal direction <i class="accord-icon">+</i></button><div class="accord-body"><div class="accord-content">Network edges reflect conditional association structure in the estimated graph; they should not be interpreted as directed causal effects between symptoms.</div></div></div>
-      <div class="accord-item open"><button class="accord-trigger">Policy associations are exploratory <i class="accord-icon">+</i></button><div class="accord-body"><div class="accord-content">Lagged macro–symptom associations are used to identify plausible temporal alignment, not to claim that specific policies caused specific symptoms.</div></div></div>
-      <div class="accord-item"><button class="accord-trigger">Domain mapping is interpretive <i class="accord-icon">+</i></button><div class="accord-body"><div class="accord-content">The four-domain alignment is a fixed interpretive layer used for cross-phase comparability, not an ontological claim about the true structure of psychopathology.</div></div></div>
-    </div>
-  </div>
-</section>
-
-<!-- 8 FOOTER -->
-<footer id="resources" class="site-footer">
-  <div class="wrap">
-    <div class="footer-label">Glossary</div>
-    <dl class="g2 gap12" style="margin-bottom:48px">
-      <div class="gl-entry"><dt>Mesoscale scaffold</dt><dd>The relatively stable community structure — broad modular organization persisting even when influence shifts across phases.</dd></div>
-      <div class="gl-entry"><dt>Minimum dominating set <span class="tag">MDS</span></dt><dd>Smallest node set covering the whole graph directly or through neighbors. Defines which symptoms can serve as drivers.</dd></div>
-      <div class="gl-entry"><dt>Control frequency <span class="tag">CF</span></dt><dd>Proportion of exact MDS solutions in which a symptom appears. High CF indicates repeated participation in driver-node sets.</dd></div>
-      <div class="gl-entry"><dt>Avg. control frequency <span class="tag">ACF</span></dt><dd>Mean node-level CF within a module. Useful for summarizing within-module control, but less stable than AMCS under case loss.</dd></div>
-      <div class="gl-entry"><dt>Avg. module control strength <span class="tag">AMCS</span></dt><dd>Directed summary of how strongly one module dominates another. This is the manuscript's primary mesoscopic control metric.</dd></div>
-    </dl>
-    <div class="footer-label">Resources</div>
-    <div style="display:flex;gap:12px;margin-bottom:40px;flex-wrap:wrap">
-      <a class="res-btn" href={manuscriptPdfUrl} target="_blank" rel="noopener noreferrer"><span class="res-btn-icon">PDF</span><div class="res-btn-text"><strong>Main manuscript</strong><span>Full manuscript PDF</span></div></a>
-      <a class="res-btn" href={supplementaryPdfUrl} target="_blank" rel="noopener noreferrer"><span class="res-btn-icon">SI</span><div class="res-btn-text"><strong>Supplementary information</strong><span>Sensitivity analyses, variable mapping, robustness, and additional details</span></div></a>
-      <a class="res-btn" href={analysisRepoUrl} target="_blank" rel="noopener noreferrer"><span class="res-btn-icon">&lt;/&gt;</span><div class="res-btn-text"><strong>Analysis code</strong><span>Reproducible analysis pipeline on GitHub</span></div></a>
-      <a class="res-btn" href={siteRepoUrl} target="_blank" rel="noopener noreferrer"><span class="res-btn-icon">GH</span><div class="res-btn-text"><strong>Website repository</strong><span>Website source code on GitHub</span></div></a>
-    </div>
-    <div class="citation">Fan, T. &amp; Zhang, X. Module control in youth symptom networks across COVID-19. Paper introduction website. Nanjing Medical University.</div>
-  </div>
-</footer>
-
-<script is:inline define:vars={{ phaseMetaList, phaseModuleGraphs, backboneNodesForView }}>
-  var phases = phaseMetaList;
-  var phaseGraphs = phaseModuleGraphs;
-  var backboneNodes = backboneNodesForView;
-  var phaseGraphMap = {};
-  phaseGraphs.forEach(function(g){phaseGraphMap[g.phaseId]=g;});
-  var moduleColors={STR:'#CC79A7',EMO:'#E69F00',CSF:'#56B4E9',SPF:'#009E73',PHY:'#D55E00'};
-
-  // Counter
-  function animateCounter(el,target,dur){dur=dur||1800;var start=null,fmt=target>999;function step(ts){if(!start)start=ts;var p=Math.min((ts-start)/dur,1),e=1-Math.pow(1-p,3),v=Math.floor(e*target);el.textContent=fmt?v.toLocaleString():v;if(p<1)requestAnimationFrame(step);else el.textContent=fmt?target.toLocaleString():target;}requestAnimationFrame(step);}
-
-  // Observers
-  var revealObs=new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting)e.target.classList.add('visible');});},{threshold:0.1,rootMargin:'0px 0px -30px 0px'});
-  document.querySelectorAll('.reveal,.stagger').forEach(function(el){revealObs.observe(el);});
-  var counterDone=false;
-  new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting&&!counterDone){counterDone=true;document.querySelectorAll('.h-stat-num').forEach(function(el){animateCounter(el,parseInt(el.dataset.target,10));});}});},{threshold:0.3}).observe(document.querySelector('.hero-stats'));
-  // Nav active
-  document.querySelectorAll('section[id]').forEach(function(s){new IntersectionObserver(function(es){es.forEach(function(e){if(e.isIntersecting)document.querySelectorAll('.nav-link').forEach(function(l){l.classList.toggle('active',l.getAttribute('href')==='#'+e.target.id);});});},{rootMargin:'-40% 0px -55% 0px'}).observe(s);});
-
-  // Phase Explorer
-  (function(){
-    var tl=document.getElementById('timeline'),svg=document.getElementById('networkSvg'),ns='http://www.w3.org/2000/svg';
-    var detailEl=document.getElementById('moduleDetail');
-    var selectedEl=document.getElementById('selectedModule');
-    var tip=document.getElementById('phaseTip');
-    var activePhaseKey='early';
-    var selectedModuleId=null;
-    var phaseNodePositions={};
-    var dragState=null;
-
-    function showTip(e,text){
-      if(!tip)return;
-      tip.textContent=text;
-      tip.classList.add('visible');
-      tip.style.left=(e.clientX+14)+'px';
-      tip.style.top=(e.clientY+14)+'px';
-    }
-
-    function moveTip(e){
-      if(!tip||!tip.classList.contains('visible'))return;
-      tip.style.left=(e.clientX+14)+'px';
-      tip.style.top=(e.clientY+14)+'px';
-    }
-
-    function hideTip(){
-      if(!tip)return;
-      tip.classList.remove('visible');
-    }
-
-    function renderModuleDetail(phaseKey,moduleId){
-      if(!detailEl)return;
-      var graph=phaseGraphMap[phaseKey];
-      if(!graph||!moduleId){
-        detailEl.innerHTML='<p class="module-empty">Click a module node in the graph to view node details.</p>';
-        if(selectedEl)selectedEl.innerHTML='Selected module: <strong>None</strong>';
-        return;
-      }
-      var mod=graph.modules.find(function(m){return m.id===moduleId;});
-      if(!mod){
-        detailEl.innerHTML='<p class="module-empty">Module details unavailable for this phase.</p>';
-        if(selectedEl)selectedEl.innerHTML='Selected module: <strong>None</strong>';
-        return;
-      }
-      if(selectedEl)selectedEl.innerHTML='Selected module: <strong>'+mod.label+'</strong>';
-      function englishOnly(name){
-        return String(name||'').replace(/\s*\([^)]*[\u4e00-\u9fff][^)]*\)\s*$/,'').trim();
-      }
-      var nodesHtml=(mod.nodes&&mod.nodes.length)
-        ? mod.nodes.map(function(n){return '<span class="module-node-pill">'+englishOnly(n)+'</span>';}).join('')
-        : '<p class="module-empty">No node list found in module report.</p>';
-      detailEl.innerHTML=
-        '<h4>'+mod.label+' Module</h4>'+
-        '<div class="module-meta">Node count: '+mod.nodeCount+'</div>'+
-        '<div class="module-node-list">'+nodesHtml+'</div>';
-    }
-
-    function arcPath(a,b){
-      var mx=(a.x+b.x)/2,my=(a.y+b.y)/2;
-      var dx=b.x-a.x,dy=b.y-a.y;
-      var norm=Math.hypot(dx,dy)||1;
-      var curve=26;
-      var cx=mx-(dy/norm)*curve;
-      var cy=my+(dx/norm)*curve;
-      return 'M '+a.x+' '+a.y+' Q '+cx+' '+cy+' '+b.x+' '+b.y;
-    }
-
-    function clamp(v,min,max){
-      return Math.max(min,Math.min(max,v));
-    }
-
-    function toSvgCoord(evt){
-      var rect=svg.getBoundingClientRect();
-      var x=(evt.clientX-rect.left)*(480/rect.width);
-      var y=(evt.clientY-rect.top)*(360/rect.height);
-      return {x:clamp(x,56,424),y:clamp(y,56,320)};
-    }
-
-    phases.forEach(function(ph,i){
-      var node=document.createElement('button');node.className='tl-node'+(i===0?' active':'');node.textContent=(i+1);
-      var lbl=document.createElement('span');lbl.className='tl-label';lbl.textContent=ph.label;
-      var dt=document.createElement('span');dt.className='tl-date';dt.textContent=ph.date;
-      node.appendChild(lbl);node.appendChild(dt);
-      node.addEventListener('click',function(){setPhase(i);});tl.appendChild(node);
-    });
-
-    function updatePhaseFigure(figId,imgId,capId,src,alt,caption){
-      var fig=document.getElementById(figId);
-      var img=document.getElementById(imgId);
-      var cap=document.getElementById(capId);
-      if(!fig||!img||!cap){return;}
-      fig.classList.add('fading');
-      img.src=src;
-      img.alt=alt;
-      cap.textContent=caption;
-      setTimeout(function(){fig.classList.remove('fading');},280);
-    }
-
-    function setPhase(idx){
-      var ph=phases[idx];
-      activePhaseKey=ph.key;
-      selectedModuleId=null;
-      tl.querySelectorAll('.tl-node').forEach(function(n,i){n.classList.toggle('active',i===idx);});
-      document.getElementById('pRegime').textContent=ph.regime;
-      document.getElementById('pHeadline').textContent=ph.summary;
-      document.getElementById('pContext').textContent=ph.context;
-      document.getElementById('pStable').textContent=ph.stable;
-      document.getElementById('pChange').textContent=ph.change;
-      var badges=document.getElementById('pBadges');badges.textContent='';
-      var graph=phaseGraphMap[ph.key];
-      var moduleCount=(graph&&graph.moduleCount)?graph.moduleCount:0;
-      [['n = ',ph.sample.toLocaleString()],['Modules: ',String(moduleCount)]].forEach(function(b){var sp=document.createElement('span');sp.className='p-badge';sp.textContent=b[0];var st=document.createElement('strong');st.textContent=b[1];sp.appendChild(st);badges.appendChild(sp);});
-      renderModuleDetail(ph.key,null);
-      updatePhaseFigure('phaseNetworkFig','phaseNetworkImg','phaseNetworkCap',ph.networkFigure,ph.label+' phase network figure',ph.networkCaption);
-      updatePhaseFigure('phaseChordFig','phaseChordImg','phaseChordCap',ph.chordFigure,ph.label+' phase module chord diagram',ph.chordCaption);
-      renderNetwork(ph,graph);
-    }
-
-    function renderNetwork(ph,graph){
-      while(svg.firstChild)svg.removeChild(svg.firstChild);
-      hideTip();
-      if(!graph){
-        return;
-      }
-
-      var width=480,height=360,cx=240,cy=186,radius=128;
-      var defs=document.createElementNS(ns,'defs'),marker=document.createElementNS(ns,'marker');
-      marker.setAttribute('id','ah');marker.setAttribute('markerWidth','10');marker.setAttribute('markerHeight','8');marker.setAttribute('refX','9');marker.setAttribute('refY','4');marker.setAttribute('orient','auto');
-      var poly=document.createElementNS(ns,'polygon');poly.setAttribute('points','0 0, 10 4, 0 8');poly.setAttribute('fill','#64748b');
-      marker.appendChild(poly);defs.appendChild(marker);svg.appendChild(defs);
-      var bg=document.createElementNS(ns,'rect');bg.setAttribute('width',String(width));bg.setAttribute('height',String(height));bg.setAttribute('rx','10');bg.setAttribute('fill','#f7fbff');svg.appendChild(bg);
-      var ring=document.createElementNS(ns,'circle');ring.setAttribute('cx',String(cx));ring.setAttribute('cy',String(cy));ring.setAttribute('r',String(radius));ring.setAttribute('fill','none');ring.setAttribute('stroke','#d8e4f5');ring.setAttribute('stroke-dasharray','4 6');svg.appendChild(ring);
-
-      var modules=graph.modules||[];
-      var preset={
-        STR:{x:240,y:72},
-        EMO:{x:392,y:176},
-        CSF:{x:240,y:292},
-        SPF:{x:88,y:176},
-        PHY:{x:338,y:104}
-      };
-      var positions=phaseNodePositions[ph.key];
-      if(!positions) positions={};
-      var fallbackMods=modules.filter(function(mod){return !preset[mod.id];});
-      var angleStep=(Math.PI*2)/Math.max(fallbackMods.length,1);
-      var offset=0.28;
-      modules.forEach(function(mod,i){
-        if(positions[mod.id]){
-          positions[mod.id].mod=mod;
-        }else if(preset[mod.id]){
-          positions[mod.id]={x:preset[mod.id].x,y:preset[mod.id].y,mod:mod};
-        } else {
-          var j=fallbackMods.findIndex(function(m){return m.id===mod.id;});
-          var angle=(-Math.PI/2)+offset+(j*angleStep);
-          positions[mod.id]={x:cx+Math.cos(angle)*radius,y:cy+Math.sin(angle)*radius,mod:mod};
-        }
-      });
-      Object.keys(positions).forEach(function(k){ if(!modules.some(function(m){return m.id===k;})){ delete positions[k]; }});
-      phaseNodePositions[ph.key]=positions;
-
-      var validEdges=(graph.edges||[])
-        .filter(function(e){return e.source!==e.target&&positions[e.source]&&positions[e.target];})
-        .sort(function(a,b){return b.weight-a.weight;})
-        .slice(0,Math.max((modules.length||0)+1,1));
-      var maxW=0,minW=Infinity;
-      validEdges.forEach(function(e){if(e.weight>maxW)maxW=e.weight;if(e.weight<minW)minW=e.weight;});
-      if(!Number.isFinite(minW)){minW=0;maxW=1;}
-      function strokeWidth(w){
-        if(maxW===minW)return 3.8;
-        var t=(w-minW)/(maxW-minW);
-        return 2.8+(Math.sqrt(Math.max(0,t))*2.6);
-      }
-
-      validEdges.forEach(function(e){
-        var a=positions[e.source],b=positions[e.target];
-        var path=document.createElementNS(ns,'path');
-        path.setAttribute('d',arcPath(a,b));
-        path.setAttribute('fill','none');
-        path.setAttribute('stroke','#8aa1bf');
-        path.setAttribute('stroke-width',String(strokeWidth(e.weight)));
-        path.setAttribute('stroke-linecap','round');
-        path.setAttribute('opacity','0.82');
-        path.setAttribute('marker-end','url(#ah)');
-        path.addEventListener('mouseenter',function(evt){showTip(evt,e.source+' → '+e.target+' | AMCS: '+e.weight.toFixed(3));});
-        path.addEventListener('mousemove',moveTip);
-        path.addEventListener('mouseleave',hideTip);
-        svg.appendChild(path);
-
-        var tx=(a.x*0.45+b.x*0.55),ty=(a.y*0.45+b.y*0.55);
-        var val=document.createElementNS(ns,'text');
-        val.setAttribute('x',String(tx));
-        val.setAttribute('y',String(ty-6));
-        val.setAttribute('font-size','12');
-        val.setAttribute('font-weight','600');
-        val.setAttribute('font-family','IBM Plex Sans, sans-serif');
-        val.setAttribute('text-anchor','middle');
-        val.setAttribute('fill','#334155');
-        val.textContent=e.weight.toFixed(2);
-        svg.appendChild(val);
-      });
-
-      modules.forEach(function(mod){
-        var p=positions[mod.id];
-        var color=moduleColors[mod.id]||'#1d4ed8';
-        var r=22;
-        var halo=document.createElementNS(ns,'circle');halo.setAttribute('cx',String(p.x));halo.setAttribute('cy',String(p.y));halo.setAttribute('r',String(r+9));halo.setAttribute('fill',color);halo.setAttribute('opacity','0.16');halo.style.pointerEvents='none';svg.appendChild(halo);
-        var circle=document.createElementNS(ns,'circle');circle.setAttribute('cx',String(p.x));circle.setAttribute('cy',String(p.y));circle.setAttribute('r',String(r));circle.setAttribute('fill',color);circle.setAttribute('stroke','#ffffff');circle.setAttribute('stroke-width','2.5');circle.style.cursor='grab';
-        circle.addEventListener('mouseenter',function(evt){showTip(evt,mod.label+' | nodes: '+(mod.nodeCount||mod.nodes.length||0));});
-        circle.addEventListener('mousemove',moveTip);
-        circle.addEventListener('mouseleave',hideTip);
-        circle.addEventListener('mousedown',function(evt){
-          evt.preventDefault();
-          var point=toSvgCoord(evt);
-          dragState={phaseKey:ph.key,moduleId:mod.id,ph:ph,graph:graph,offsetX:positions[mod.id].x-point.x,offsetY:positions[mod.id].y-point.y,moved:false};
-          circle.style.cursor='grabbing';
-        });
-        circle.addEventListener('click',function(){
-          if(dragState&&dragState.moved){return;}
-          selectedModuleId=mod.id;
-          renderModuleDetail(activePhaseKey,selectedModuleId);
-          renderNetwork(ph,graph);
-        });
-        svg.appendChild(circle);
-        if(selectedModuleId===mod.id){
-          var sel=document.createElementNS(ns,'circle');
-          sel.setAttribute('cx',String(p.x));sel.setAttribute('cy',String(p.y));sel.setAttribute('r',String(r+14));
-          sel.setAttribute('fill','none');sel.setAttribute('stroke','#1d4ed8');sel.setAttribute('stroke-width','2');
-          sel.style.pointerEvents='none';
-          svg.appendChild(sel);
-        }
-        var label=document.createElementNS(ns,'text');label.setAttribute('x',String(p.x));label.setAttribute('y',String(p.y+4));label.setAttribute('font-size',mod.label.length>3?'10':'12');label.setAttribute('font-weight','600');label.setAttribute('font-family','IBM Plex Sans, sans-serif');label.setAttribute('text-anchor','middle');label.setAttribute('fill','#ffffff');label.style.pointerEvents='none';label.textContent=mod.label;svg.appendChild(label);
-      });
-
-      var pl=document.createElementNS(ns,'text');pl.setAttribute('x','20');pl.setAttribute('y','28');pl.setAttribute('font-size','12');pl.setAttribute('font-weight','600');pl.setAttribute('font-family','IBM Plex Sans, sans-serif');pl.setAttribute('fill','#0f172a');pl.textContent=ph.label+' phase';svg.appendChild(pl);
-      var rl=document.createElementNS(ns,'text');rl.setAttribute('x','20');rl.setAttribute('y','44');rl.setAttribute('font-size','10');rl.setAttribute('font-family','IBM Plex Sans, sans-serif');rl.setAttribute('fill','#64748b');rl.textContent=ph.regime;svg.appendChild(rl);
-      var hint=document.createElementNS(ns,'text');hint.setAttribute('x','20');hint.setAttribute('y','344');hint.setAttribute('font-size','10');hint.setAttribute('font-family','IBM Plex Sans, sans-serif');hint.setAttribute('fill','#94a3b8');hint.textContent='Tip: drag nodes to improve readability';svg.appendChild(hint);
-    }
-
-    window.addEventListener('mousemove',function(evt){
-      if(!dragState){return;}
-      var graph=phaseGraphMap[dragState.phaseKey];
-      if(!graph){return;}
-      var point=toSvgCoord(evt);
-      var nextX=clamp(point.x+dragState.offsetX,56,424);
-      var nextY=clamp(point.y+dragState.offsetY,56,320);
-      var pos=phaseNodePositions[dragState.phaseKey];
-      if(!pos||!pos[dragState.moduleId]){return;}
-      pos[dragState.moduleId].x=nextX;
-      pos[dragState.moduleId].y=nextY;
-      dragState.moved=true;
-      renderNetwork(dragState.ph,graph);
-    });
-
-    window.addEventListener('mouseup',function(){
-      if(!dragState){return;}
-      setTimeout(function(){ dragState=null; },0);
-    });
-
-    setPhase(0);
-  })();
-
-  // Backbone detail card sync (left list -> right text card)
-  (function(){
-    var detail=document.getElementById('bbDetail');
-    var buttons=Array.prototype.slice.call(document.querySelectorAll('.bb-node-btn'));
-    if(!detail||!buttons.length||!Array.isArray(backboneNodes)){return;}
-
-    var domainLabel={STR:'Stress',EMO:'Emotion',CSF:'Cognitive-social',SPF:'Self/physiology',PHY:'Physiological'};
-    var nodeMap={};
-    backboneNodes.forEach(function(n){nodeMap[String(n.id)]=n;});
-
-    function fmt(v){
-      return (typeof v==='number'&&Number.isFinite(v)) ? v.toFixed(6) : 'N/A';
-    }
-
-    function esc(s){
-      return String(s)
-        .replace(/&/g,'&amp;')
-        .replace(/</g,'&lt;')
-        .replace(/>/g,'&gt;')
-        .replace(/"/g,'&quot;')
-        .replace(/'/g,'&#39;');
-    }
-
-    function renderNode(node){
-      if(!node){return;}
-      var domainName=domainLabel[node.domain]||node.domain||'Unknown';
-      detail.innerHTML=
-        '<span class="bb-tag">Backbone set</span>'+
-        '<span class="bb-tag">Node interpretation</span>'+
-        '<h4>#'+esc(node.id)+' '+esc(node.name)+'</h4>'+
-        '<p class="bb-metrics">Domain: '+esc(node.domain)+' ('+esc(domainName)+') · avg CF: '+fmt(node.avgCF)+' · CV: '+fmt(node.cv)+'</p>'+
-        '<p><strong>Why:</strong> '+esc(node.why||'Included in the manuscript backbone set for cross-phase interpretation.')+'</p>'+
-        '<p><strong>Interpretation:</strong> '+esc(node.interpretation||'Used as a stable reference node under the conserved module scaffold.')+'</p>';
-    }
-
-    function setActiveNode(id){
-      buttons.forEach(function(btn){
-        btn.classList.toggle('active',btn.getAttribute('data-bb-node')===String(id));
-      });
-      renderNode(nodeMap[String(id)]);
-    }
-
-    buttons.forEach(function(btn){
-      btn.addEventListener('click',function(){
-        var id=btn.getAttribute('data-bb-node');
-        if(!id){return;}
-        setActiveNode(id);
-      });
-    });
-
-    var defaultBtn=buttons.find(function(btn){return btn.classList.contains('active');}) || buttons[0];
-    var defaultId=defaultBtn&&defaultBtn.getAttribute('data-bb-node');
-    if(defaultId){setActiveNode(defaultId);}
-  })();
-
-  // Accordion
-  document.querySelectorAll('.accord-trigger').forEach(function(t){t.addEventListener('click',function(){var item=t.closest('.accord-item'),open=item.classList.contains('open');document.querySelectorAll('.accord-item').forEach(function(a){a.classList.remove('open');});if(!open)item.classList.add('open');});});
-</script>
+  </footer>
 </body>
 </html>

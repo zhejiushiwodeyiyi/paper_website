@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Figure Placeholder</title>
+  <desc id="desc">Placeholder figure for manuscript visuals not yet provided.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#eef4ff"/>
+      <stop offset="100%" stop-color="#f8fbff"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="720" fill="url(#bg)"/>
+  <rect x="60" y="60" width="1080" height="600" rx="28" fill="#ffffff" stroke="#c8d8ee" stroke-width="4"/>
+  <text x="110" y="180" font-family="Georgia, serif" font-size="56" fill="#1e40af">Figure Placeholder</text>
+  <text x="110" y="260" font-family="Arial, sans-serif" font-size="28" fill="#334155">
+    Original manuscript figures have not been provided yet.
+  </text>
+  <text x="110" y="315" font-family="Arial, sans-serif" font-size="28" fill="#334155">
+    Replace this SVG with the real network / methods / results figure files.
+  </text>
+  <rect x="110" y="390" width="220" height="18" rx="9" fill="#cc79a7"/>
+  <rect x="110" y="438" width="300" height="18" rx="9" fill="#e69f00"/>
+  <rect x="110" y="486" width="260" height="18" rx="9" fill="#56b4e9"/>
+  <rect x="110" y="534" width="340" height="18" rx="9" fill="#009e73"/>
+  <text x="110" y="620" font-family="Arial, sans-serif" font-size="24" fill="#64748b">
+    Current site text has already been mapped to your paper PDF.
+  </text>
+</svg>

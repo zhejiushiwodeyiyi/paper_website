@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 720">
+  <rect width="1200" height="720" fill="#f8fbff"/>
+  <rect x="40" y="40" width="1120" height="640" rx="24" fill="#ffffff" stroke="#c8d8ee" stroke-width="3"/>
+  <text x="80" y="110" font-family="Georgia, serif" font-size="42" fill="#0f172a">Structural Prominence Results</text>
+  <text x="80" y="150" font-family="Arial, sans-serif" font-size="24" fill="#475569">Stress appraisal and sleep disturbance showed the strongest cross-domain structural positioning.</text>
+
+  <text x="90" y="220" font-family="Arial, sans-serif" font-size="28" font-weight="700" fill="#0f172a">Top node-level control frequency</text>
+  <line x1="90" y1="255" x2="430" y2="255" stroke="#dbe4f0" stroke-width="2"/>
+  <text x="90" y="305" font-family="Arial, sans-serif" font-size="24" fill="#334155">PSS12</text>
+  <rect x="180" y="282" width="225" height="28" rx="8" fill="#1d4ed8"/>
+  <text x="420" y="304" font-family="Arial, sans-serif" font-size="22" fill="#1d4ed8">0.750</text>
+  <text x="90" y="350" font-family="Arial, sans-serif" font-size="24" fill="#334155">DR3</text>
+  <rect x="180" y="327" width="188" height="28" rx="8" fill="#2563eb" fill-opacity="0.88"/>
+  <text x="383" y="349" font-family="Arial, sans-serif" font-size="22" fill="#2563eb">0.625</text>
+  <text x="90" y="395" font-family="Arial, sans-serif" font-size="24" fill="#334155">DR4</text>
+  <rect x="180" y="372" width="113" height="28" rx="8" fill="#60a5fa" fill-opacity="0.9"/>
+  <text x="308" y="394" font-family="Arial, sans-serif" font-size="22" fill="#2563eb">0.375</text>
+  <text x="90" y="440" font-family="Arial, sans-serif" font-size="24" fill="#334155">ISI2 / ISI3 / ISI4 / PHQ2 / PHQ4 / PHQ7 / PSS10</text>
+  <rect x="180" y="417" width="75" height="28" rx="8" fill="#93c5fd"/>
+  <text x="270" y="439" font-family="Arial, sans-serif" font-size="22" fill="#2563eb">0.250</text>
+
+  <text x="520" y="220" font-family="Arial, sans-serif" font-size="28" font-weight="700" fill="#0f172a">Average module control strength</text>
+  <text x="520" y="270" font-family="Arial, sans-serif" font-size="24" fill="#334155">NegMod → PosMod</text>
+  <rect x="760" y="247" width="257" height="28" rx="8" fill="#7c3aed"/>
+  <text x="1032" y="269" font-family="Arial, sans-serif" font-size="22" fill="#7c3aed">0.643</text>
+  <text x="520" y="315" font-family="Arial, sans-serif" font-size="24" fill="#334155">AnxMod → DepMod</text>
+  <rect x="760" y="292" width="175" height="28" rx="8" fill="#f59e0b"/>
+  <text x="950" y="314" font-family="Arial, sans-serif" font-size="22" fill="#f59e0b">0.438</text>
+  <text x="520" y="360" font-family="Arial, sans-serif" font-size="24" fill="#334155">NegMod → CogMod</text>
+  <rect x="760" y="337" width="150" height="28" rx="8" fill="#8b5cf6"/>
+  <text x="925" y="359" font-family="Arial, sans-serif" font-size="22" fill="#8b5cf6">0.375</text>
+  <text x="520" y="405" font-family="Arial, sans-serif" font-size="24" fill="#334155">SlpMod → AnxMod</text>
+  <rect x="760" y="382" width="139" height="28" rx="8" fill="#22c55e"/>
+  <text x="914" y="404" font-family="Arial, sans-serif" font-size="22" fill="#16a34a">0.347</text>
+  <text x="520" y="450" font-family="Arial, sans-serif" font-size="24" fill="#334155">SlpMod → DepMod</text>
+  <rect x="760" y="427" width="125" height="28" rx="8" fill="#4ade80"/>
+  <text x="900" y="449" font-family="Arial, sans-serif" font-size="22" fill="#16a34a">0.312</text>
+
+  <text x="90" y="540" font-family="Arial, sans-serif" font-size="26" font-weight="700" fill="#0f172a">Module-level summary</text>
+  <text x="90" y="580" font-family="Arial, sans-serif" font-size="22" fill="#475569">Highest average control frequency: Sleep module (0.125), then Negative Stress module (0.107).</text>
+  <text x="90" y="615" font-family="Arial, sans-serif" font-size="22" fill="#475569">Highest out-strength: Negative Stress module (1.289), followed by Sleep module (0.971).</text>
+</svg>
